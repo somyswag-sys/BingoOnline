@@ -1,1 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Bingo 1‑20 players — single file</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:Arial;margin:12px;background:#f7f7f9;color:#111}
+header{display:flex;gap:12px;align-items:center}
+#boardWrap{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.card{border:1px solid #ccc;padding:6px;background:#fff}
+.grid{display:grid;grid-template-columns:repeat(5,40px);grid-auto-rows:40px;gap:4px}
+.cell{display:flex;align-items:center;justify-content:center;border-radius:4px;background:#e9eef6}
+.cell.mark{background:#4caf50;color:#fff}
+.controls{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+.notice{margin-top:8px;padding:8px;background:#fff3cd;border:1px solid #ffeeba}
+.players{margin-top:12px}
+.small{font-size:12px;color:#666}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <strong>Bingo 1–20 (1 файл)</strong><br><span class="small">Числа 1–100, 20 карт, localStorage sync</span>
+  </div>
+  <div style="margin-left:auto">
+    <input id="name" placeholder="Ваше имя" />
+    <select id="pick"></select>
+    <button id="join">Войти</button>
+  </div>
+</header>
 
+<div class="controls">
+  <button id="start">Создать/Обновить карты</button>
+  <button id="draw">Тянуть число</button>
+  <button id="reset">Сбросить игру</button>
+  <div id="last" class="small"></div>
+</div>
+
+<div id="boardWrap"></div>
+<div id="notice" class="notice" style="display:none"></div>
+<div class="players"><strong>Игроки:</strong> <span id="playersList">—</span></div>
+
+<script>
+/* Простая бинго-игра с sync через localStorage */
+const MAX_CARDS=20, MAX_NUM=100;
+const stateKey='bingo_state_v1';
+let me=null, state=loadState();
+
+function saveState(){localStorage.setItem(stateKey, JSON.stringify(state));}
+function loadState(){try{return JSON.parse(localStorage.getItem(stateKey))||initState()}catch(e){return initState()}}
+function initState(){return {cards:genCards(), players:{}, drawn:[], turn:0, winners:[]}}
+
+function genCards(){
+  const cards=[];
+  for(let c=0;c<MAX_CARDS;c++){
+    const nums=new Set();
+    while(nums.size<25){nums.add(1+Math.floor(Math.random()*MAX_NUM))}
+    cards.push(Array.from(nums));
+  }
+  return cards;
+}
+
+function renderPick(){
+  const sel=document.getElementById('pick'); sel.innerHTML='';
+  for(let i=0;i<MAX_CARDS;i++){
+    const opt=document.createElement('option'); opt.value=i; opt.textContent='Карта '+(i+1);
+    sel.appendChild(opt);
+  }
+}
+
+function renderBoards(){
+  const wrap=document.getElementById('boardWrap'); wrap.innerHTML='';
+  state.cards.forEach((card,idx)=>{
+    const div=document.createElement('div'); div.className='card'; div.dataset.idx=idx;
+    div.innerHTML=`<strong>Карта ${idx+1}</strong><div class="grid"></div>`;
+    const grid=div.querySelector('.grid');
+    card.forEach((n,i)=>{
+      const cell=document.createElement('div'); cell.className='cell'; cell.textContent=n;
+      if(state.drawn.includes(n)) cell.classList.add('mark');
+      grid.appendChild(cell);
+    });
+    wrap.appendChild(div);
+  });
+  updatePlayersList();
+}
+
+function updatePlayersList(){
+  const el=document.getElementById('playersList');
+  el.textContent=Object.values(state.players).map(p=>p.name+'(к'+(p.card+1)+')').join(', ')||'—';
+}
+
+function join(){
+  const name=document.getElementById('name').value.trim(); const card=+document.getElementById('pick').value;
+  if(!name) return alert('Введите имя');
+  me={name,card};
+  state.players[name]={name,card,marks:[]};
+  saveState(); renderBoards(); broadcast();
+}
+
+function draw(){
+  // host draws random from remaining
+  const pool=[];
+  for(let i=1;i<=MAX_NUM;i++) if(!state.drawn.includes(i)) pool.push(i);
+  if(!pool.length) return alert('Все числа вытянуты');
+  const n=pool[Math.floor(Math.random()*pool.length)];
+  state.drawn.push(n); state.turn++;
+  saveState(); broadcast();
+  checkAll(n);
+}
+
+function checkAll(n){
+  // пометить у игроков и проверить линии
+  Object.values(state.players).forEach(p=>{
+    if(!p.marks.includes(n) && state.cards[p.card].includes(n)) p.marks.push(n);
+    const lines=countLines(state.cards[p.card], p.marks);
+    if(lines>=1 && !state.winners.find(w=>w.name===p.name && w.stage===1)){
+      state.winners.push({name:p.name,stage:1,turn:state.turn}); notifyAll(`${p.name} — первая линия!`);
+    }
+    if(lines>=2 && !state.winners.find(w=>w.name===p.name && w.stage===2)){
+      state.winners.push({name:p.name,stage:2,turn:state.turn}); notifyAll(`${p.name} — две линии!`);
+    }
+    if(lines>=3 && !state.winners.find(w=>w.name===p.name && w.stage===3)){
+      state.winners.push({name:p.name,stage:3,turn:state.turn}); notifyAll(`${p.name} — БИНГО! Полная карточка!`);
+    }
+  });
+  saveState(); renderBoards();
+}
+
+function countLines(card, marks){
+  // считаем заполненные строки (5 в ряд)
+  let lines=0;
+  for(let r=0;r<5;r++){
+    let ok=true;
+    for(let c=0;c<5;c++){
+      const n=card[r*5+c];
+      if(!marks.includes(n)) {ok=false;break;}
+    }
+    if(ok) lines++;
+  }
+  return lines;
+}
+
+function notifyAll(msg){
+  document.getElementById('notice').style.display='block';
+  document.getElementById('notice').textContent=msg;
+  // также сохраняем в state для синхронизации
+  state.lastMsg=msg; saveState(); broadcast();
+}
+
+function broadcast(){ localStorage.setItem('bingo_ping', Date.now()); }
+
+window.addEventListener('storage', e=>{
+  if(e.key===stateKey || e.key==='bingo_ping'){
+    state=loadState(); renderBoards();
+    if(state.lastMsg) document.getElementById('notice').style.display='block';
+    document.getElementById('last').textContent = 'Ходов: '+state.turn+'; Вытянуто: '+state.drawn.join(',');
+  }
+});
+
+document.getElementById('start').onclick=()=>{ state.cards=genCards(); state.drawn=[]; state.players={}; state.winners=[]; state.turn=0; state.lastMsg=''; saveState(); renderBoards(); broadcast();}
+document.getElementById('join').onclick=join;
+document.getElementById('draw').onclick=draw;
+document.getElementById('reset').onclick=()=>{ if(confirm('Сбросить игру?')){ localStorage.removeItem(stateKey); state=initState(); saveState(); renderBoards(); broadcast(); }};
+
+renderPick(); renderBoards();
+</script>
+</body>
+</html>
